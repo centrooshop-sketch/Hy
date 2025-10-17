@@ -1746,7 +1746,7 @@ switch ($action) {
                                u.abbreviation as unit_abbr 
                                FROM order_items oi 
                                JOIN dishes d ON oi.dish_id = d.id 
-                               LEFT JOIN units u ON oi.unit_id = u.id
+                               LEFT JOIN units u ON d.unit_id = u.id
                                LEFT JOIN dish_sizes ds ON d.id = ds.dish_id AND ds.weight = oi.weight
                                LEFT JOIN sizes s ON ds.size_id = s.id
                                WHERE oi.order_id = ?";
@@ -1892,7 +1892,7 @@ switch ($action) {
                                       u.abbreviation as unit_abbr
                                       FROM order_items oi 
                                       JOIN dishes d ON oi.dish_id = d.id 
-                                      LEFT JOIN units u ON oi.unit_id = u.id
+                                      LEFT JOIN units u ON d.unit_id = u.id
                                       LEFT JOIN dish_sizes ds ON d.id = ds.dish_id AND ds.weight = oi.weight
                                       LEFT JOIN sizes s ON ds.size_id = s.id
                                       WHERE oi.order_id = ?
@@ -1954,7 +1954,7 @@ switch ($action) {
                             u.abbreviation as unit_abbr
                             FROM order_items oi 
                             JOIN dishes d ON oi.dish_id = d.id 
-                            LEFT JOIN units u ON oi.unit_id = u.id
+                            LEFT JOIN units u ON d.unit_id = u.id
                             LEFT JOIN dish_sizes ds ON d.id = ds.dish_id AND ds.weight = oi.weight
                             LEFT JOIN sizes s ON ds.size_id = s.id
                             WHERE oi.order_id = " . (int)$order_id . "
