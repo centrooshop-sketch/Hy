@@ -360,13 +360,16 @@ function buildImageUrl($filename, $type = 'product', $size = 'full') {
     $name = normalizeImageFilename($filename);
     $effectiveName = chooseImageFilenameForUrl($name, $type, $size);
 
+    // Decide which web path segment to use based on actual file availability
+    // Default to base images directory
     $segment = 'images';
     if ($type === 'promotion') {
         $segment = 'images/promotions';
-    } else { // product images
-        if ($size === 'thumbnail') {
-            $segment = 'images/thumbnails';
-        }
+    } else if ($size === 'thumbnail') {
+        // Use thumbnails directory only if the thumbnail variant actually exists on disk
+        // Otherwise fall back to full-size directory to avoid broken links (404)
+        $thumbnailExists = imageFileExistsOnDisk($effectiveName, 'product', 'thumbnail');
+        $segment = $thumbnailExists ? 'images/thumbnails' : 'images';
     }
 
     // rawurlencode for safe transport (keeps spaces as %20 etc.)
