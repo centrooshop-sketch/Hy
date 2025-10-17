@@ -316,6 +316,127 @@ function apiSuccess($data = null, $message = 'Success', $code = 200) {
     apiResponse(true, $data, $message, $code);
 }
 
+// ==============================
+// Image URL helper utilities
+// ==============================
+/**
+ * Returns canonical base URL for building absolute links
+ */
+function getBaseUrl() {
+    // Force HTTPS canonical host to avoid mixed content issues in apps
+    return 'https://ryabokonov.site';
+}
+
+/**
+ * Returns project root path segment (leading slash, no trailing slash)
+ */
+function getProjectPath() {
+    return '/tokio';
+}
+
+/**
+ * Normalizes a filename coming from DB and applies a default placeholder
+ */
+function normalizeImageFilename($filename, $default = 'placeholder.jpg') {
+    if (!$filename) return $default;
+    $trimmed = trim($filename);
+    if ($trimmed === '') return $default;
+    // Prevent directory traversal and remove any path prefixes
+    $basename = basename($trimmed);
+    return $basename ?: $default;
+}
+
+/**
+ * Builds an absolute image URL
+ * $type: 'product' | 'promotion'
+ * $size: 'full' | 'thumbnail' (promotions currently only support 'full')
+ */
+function buildImageUrl($filename, $type = 'product', $size = 'full') {
+    // Allow passing absolute URLs directly (stored in DB)
+    if (is_string($filename) && preg_match('~^https?://~i', $filename)) {
+        return $filename;
+    }
+
+    $name = normalizeImageFilename($filename);
+    $effectiveName = chooseImageFilenameForUrl($name, $type, $size);
+
+    $segment = 'images';
+    if ($type === 'promotion') {
+        $segment = 'images/promotions';
+    } else { // product images
+        if ($size === 'thumbnail') {
+            $segment = 'images/thumbnails';
+        }
+    }
+
+    // rawurlencode for safe transport (keeps spaces as %20 etc.)
+    return getBaseUrl() . getProjectPath() . '/' . $segment . '/' . rawurlencode($effectiveName);
+}
+
+/**
+ * Convenience wrapper that returns both full and thumbnail URLs for products
+ */
+function buildProductImageUrls($filename) {
+    // If thumbnail is missing on disk, gracefully fall back to full
+    $full = buildImageUrl($filename, 'product', 'full');
+    $thumbCandidate = normalizeImageFilename($filename);
+    $thumbExists = imageFileExistsOnDisk($thumbCandidate, 'product', 'thumbnail');
+    $thumb = $thumbExists ? buildImageUrl($filename, 'product', 'thumbnail') : $full;
+    return [
+        'image_url' => $full,
+        'thumbnail_url' => $thumb
+    ];
+}
+
+// ==============================
+// Filesystem helpers for images
+// ==============================
+function getImagesBaseDir() {
+    // api-app is sibling to images directory
+    $path = __DIR__ . '/../images';
+    return $path;
+}
+
+function getImagesDirFor($type = 'product', $size = 'full') {
+    $base = rtrim(getImagesBaseDir(), '/');
+    if ($type === 'promotion') {
+        return $base . '/promotions';
+    }
+    if ($size === 'thumbnail') {
+        return $base . '/thumbnails';
+    }
+    return $base; // products full
+}
+
+function imageFileExistsOnDisk($filename, $type = 'product', $size = 'full') {
+    $dir = getImagesDirFor($type, $size);
+    $path = $dir . '/' . basename($filename);
+    // Suppress open_basedir warnings if configured; just return false in that case
+    return @is_file($path);
+}
+
+function chooseImageFilenameForUrl($filename, $type = 'product', $size = 'full') {
+    $name = normalizeImageFilename($filename);
+    // If the requested variant exists, use it
+    if (imageFileExistsOnDisk($name, $type, $size)) {
+        return $name;
+    }
+    // If a thumbnail was requested but missing, try full-size
+    if ($type !== 'promotion' && $size === 'thumbnail' && imageFileExistsOnDisk($name, 'product', 'full')) {
+        return $name;
+    }
+    // Try placeholder (prefer matching size, then full)
+    $placeholder = 'placeholder.jpg';
+    if (imageFileExistsOnDisk($placeholder, $type, $size)) {
+        return $placeholder;
+    }
+    if (imageFileExistsOnDisk($placeholder, $type, 'full')) {
+        return $placeholder;
+    }
+    // Fall back to original name even if missing to avoid breaking schema
+    return $name;
+}
+
 /**
  * Генерация API токена
  */
@@ -952,8 +1073,6 @@ switch ($action) {
         }
         
         $dishes = [];
-        $base_url = 'https://ryabokonov.site';
-        $project_path = '/tokio';
         
         while ($row = $result->fetch_assoc()) {
             $image = !empty($row['image']) ? $row['image'] : 'placeholder.jpg';
@@ -998,6 +1117,8 @@ switch ($action) {
             }
             $ing_stmt->close();
             
+            $img = normalizeImageFilename($image);
+            $imgUrls = buildProductImageUrls($img);
             $dishes[] = [
                 'id' => (int)$row['id'],
                 'name' => $row['name'],
@@ -1010,9 +1131,9 @@ switch ($action) {
                 ] : null,
                 'sizes' => $sizes,
                 'ingredients' => $ingredients,
-                'image' => $base_url . $project_path . '/images/' . $image,
-                'image_url' => $base_url . $project_path . '/images/' . $image,
-                'thumbnail_url' => $base_url . $project_path . '/images/thumbnails/' . $image,
+                'image' => $imgUrls['image_url'],
+                'image_url' => $imgUrls['image_url'],
+                'thumbnail_url' => $imgUrls['thumbnail_url'],
                 'is_available' => (bool)$row['is_available'],
                 'category' => [
                     'id' => $row['category_id'] ? (int)$row['category_id'] : null,
@@ -1059,8 +1180,8 @@ switch ($action) {
         
         if ($dish = $result->fetch_assoc()) {
             $image = !empty($dish['image']) ? $dish['image'] : 'placeholder.jpg';
-            $base_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://" . $_SERVER['HTTP_HOST'];
-            $project_path = '/tokio';
+            $img = normalizeImageFilename($image);
+            $imgUrls = buildProductImageUrls($img);
             
             // Получение размеров
             $sizes_stmt = $conn->prepare("SELECT s.id, s.name, s.description, ds.weight, ds.price_modifier 
@@ -1116,9 +1237,9 @@ switch ($action) {
                 ] : null,
                 'sizes' => $sizes,
                 'ingredients' => $ingredients,
-                'image' => $base_url . $project_path . '/images/' . $image,
-                'image_url' => $base_url . $project_path . '/images/' . $image,
-                'thumbnail_url' => $base_url . $project_path . '/images/thumbnails/' . $image,
+                'image' => $imgUrls['image_url'],
+                'image_url' => $imgUrls['image_url'],
+                'thumbnail_url' => $imgUrls['thumbnail_url'],
                 'is_available' => (bool)$dish['is_available'],
                 'category' => [
                     'id' => $dish['category_id'] ? (int)$dish['category_id'] : null,
@@ -1171,8 +1292,6 @@ switch ($action) {
         $stmt->execute();
         $result = $stmt->get_result();
         
-        $base_url = 'https://ryabokonov.site';
-        $project_path = '/tokio';
         
         $cart_items = [];
         $total = 0;
@@ -1202,6 +1321,8 @@ switch ($action) {
             $total += $subtotal;
             
             $image = !empty($row['image']) ? $row['image'] : 'placeholder.jpg';
+            $img = normalizeImageFilename($image);
+            $imgUrls = buildProductImageUrls($img);
             
             $cart_items[] = [
                 'id' => (int)$row['id'],
@@ -1214,7 +1335,9 @@ switch ($action) {
                 'weight' => $row['weight'] ? (int)$row['weight'] : ($row['dish_weight'] ? (int)$row['dish_weight'] : null),
                 'unit_abbr' => $row['unit_abbr'],
                 'subtotal' => $subtotal,
-                'image_url' => $base_url . $project_path . '/images/thumbnails/' . $image,
+                'image' => $imgUrls['image_url'],
+                'image_url' => $imgUrls['image_url'],
+                'thumbnail_url' => $imgUrls['thumbnail_url'],
                 'created_at' => $row['created_at']
             ];
         }
@@ -1695,8 +1818,6 @@ switch ($action) {
             }
             
             $orders = [];
-            $base_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://" . $_SERVER['HTTP_HOST'];
-            $project_path = '/tokio';
             
             while ($row = $result->fetch_assoc()) {
                 error_log("get_orders: Processing order ID: " . $row['id']);
@@ -1758,7 +1879,8 @@ switch ($action) {
                     
                     while ($item = $items_result->fetch_assoc()) {
                         $image = !empty($item['image']) ? $item['image'] : 'placeholder.jpg';
-                        error_log("get_orders: Item image from DB: " . ($item['image'] ?? 'NULL') . " -> Using: $image");
+                        $img = normalizeImageFilename($image);
+                        $imgUrls = buildProductImageUrls($img);
                         
                         $weight = isset($item['weight']) && $item['weight'] > 0 ? 
                                  (int)$item['weight'] : 
@@ -1776,9 +1898,9 @@ switch ($action) {
                             'weight' => $weight,
                             'unit_abbr' => $item['unit_abbr'] ?? 'г',
                             'subtotal' => (float)$item['price'] * (int)$item['quantity'],
-                            'image' => $base_url . $project_path . '/images/' . $image,
-                            'image_url' => $base_url . $project_path . '/images/' . $image,
-                            'thumbnail_url' => $base_url . $project_path . '/images/thumbnails/' . $image
+                            'image' => $imgUrls['image_url'],
+                            'image_url' => $imgUrls['image_url'],
+                            'thumbnail_url' => $imgUrls['thumbnail_url']
                         ];
                     }
                     $items_stmt->close();
@@ -1871,10 +1993,9 @@ switch ($action) {
     
     error_log("order_details: Order found! Order data: " . json_encode($order));
     
-    // URL для изображений - исправленная версия
-    $base_url = 'https://ryabokonov.site';
-    $project_path = '/tokio';
-    
+    // URL для изображений - используем хелперы
+    $base_url = getBaseUrl();
+    $project_path = getProjectPath();
     // Логируем для отладки
     error_log("order_details: Using base_url: $base_url, project_path: $project_path");
     
@@ -1906,11 +2027,9 @@ switch ($action) {
             
             while ($item = $items_result->fetch_assoc()) {
                 $image = !empty($item['image']) ? $item['image'] : 'placeholder.jpg';
-                error_log("order_details: Item '{$item['name']}' - image from DB: " . ($item['image'] ?? 'NULL') . " -> Using: $image");
-                
-                // Формируем URL изображения
-                $image_url = $base_url . $project_path . '/images/' . $image;
-                $thumbnail_url = $base_url . $project_path . '/images/thumbnails/' . $image;
+                $img = normalizeImageFilename($image);
+                $image_url = buildImageUrl($img, 'product', 'full');
+                $thumbnail_url = buildImageUrl($img, 'product', 'thumbnail');
                 error_log("order_details: Item '{$item['name']}' - image_url: $image_url");
                 
                 // Вес: используем вес из order_items, если нет - из dishes
@@ -1966,11 +2085,9 @@ switch ($action) {
                 
                 while ($item = $items_result->fetch_assoc()) {
                     $image = !empty($item['image']) ? $item['image'] : 'placeholder.jpg';
-                    error_log("order_details (direct): Item '{$item['name']}' - image from DB: " . ($item['image'] ?? 'NULL') . " -> Using: $image");
-                    
-                    // Формируем URL изображения
-                    $image_url = $base_url . $project_path . '/images/' . $image;
-                    $thumbnail_url = $base_url . $project_path . '/images/thumbnails/' . $image;
+                    $img = normalizeImageFilename($image);
+                    $image_url = buildImageUrl($img, 'product', 'full');
+                    $thumbnail_url = buildImageUrl($img, 'product', 'thumbnail');
                     error_log("order_details (direct): Item '{$item['name']}' - image_url: $image_url");
                     
                     $weight = isset($item['weight']) && $item['weight'] > 0 ? 
@@ -2450,17 +2567,15 @@ switch ($action) {
         $result = $conn->query($query);
         $promotions = [];
         
-        $base_url = 'https://ryabokonov.site';
-        $project_path = '/tokio';
-        
         while ($row = $result->fetch_assoc()) {
             $image = !empty($row['image']) ? $row['image'] : 'placeholder.jpg';
+            $img = normalizeImageFilename($image);
             $promotions[] = [
                 'id' => (int)$row['id'],
                 'title' => $row['title'],
                 'description' => $row['description'],
                 'discount_percent' => $row['discount_percent'] ? (int)$row['discount_percent'] : null,
-                'image_url' => $base_url . $project_path . '/images/promotions/' . $image,
+                'image_url' => buildImageUrl($img, 'promotion', 'full'),
                 'start_date' => $row['start_date'],
                 'end_date' => $row['end_date']
             ];
@@ -2494,9 +2609,8 @@ switch ($action) {
             apiError('Акция не найдена или неактивна', 404);
         }
         
-        $base_url = 'https://ryabokonov.site';
-        $project_path = '/tokio';
         $image = !empty($promotion['image']) ? $promotion['image'] : 'placeholder.jpg';
+        $img = normalizeImageFilename($image);
         
         // Проверка статуса акции
         $is_upcoming = $promotion['start_date'] && strtotime($promotion['start_date']) > time();
@@ -2510,7 +2624,7 @@ switch ($action) {
                 'description' => $promotion['description'],
                 'content' => $promotion['content'],
                 'discount_percent' => $promotion['discount_percent'] ? (int)$promotion['discount_percent'] : null,
-                'image_url' => $base_url . $project_path . '/images/promotions/' . $image,
+                'image_url' => buildImageUrl($img, 'promotion', 'full'),
                 'start_date' => $promotion['start_date'],
                 'end_date' => $promotion['end_date'],
                 'created_at' => $promotion['created_at'],
@@ -2588,6 +2702,67 @@ switch ($action) {
                 'free_from' => $delivery['free_from'] ? (float)$delivery['free_from'] : null
             ]
         ]);
+        break;
+
+    case 'debug_image':
+        // Диагностика изображений: по dish_id или filename
+        $dish_id = isset($params['dish_id']) ? (int)$params['dish_id'] : 0;
+        $filename = isset($params['filename']) ? trim($params['filename']) : '';
+        $type = isset($params['type']) ? $params['type'] : 'product'; // product|promotion
+        $size = isset($params['size']) ? $params['size'] : 'full'; // full|thumbnail
+
+        $source = 'params';
+        if ($dish_id > 0 && $type === 'product') {
+            $conn = getDBConnection();
+            $stmt = $conn->prepare("SELECT image FROM dishes WHERE id = ? LIMIT 1");
+            $stmt->bind_param("i", $dish_id);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+            if ($row && !empty($row['image'])) {
+                $filename = $row['image'];
+                $source = 'dishes.image';
+            }
+        }
+
+        $normalized = normalizeImageFilename($filename);
+        $exists_full = imageFileExistsOnDisk($normalized, $type, 'full');
+        $exists_thumb = ($type === 'promotion') ? null : imageFileExistsOnDisk($normalized, 'product', 'thumbnail');
+
+        $built_full = buildImageUrl($normalized, $type, 'full');
+        $built_thumb = ($type === 'promotion') ? null : buildImageUrl($normalized, 'product', 'thumbnail');
+
+        $images_dir = getImagesBaseDir();
+        $dir_full = getImagesDirFor($type, 'full');
+        $dir_thumb = ($type === 'promotion') ? null : getImagesDirFor('product', 'thumbnail');
+
+        apiSuccess([
+            'input' => [
+                'dish_id' => $dish_id,
+                'filename_param' => $filename,
+                'type' => $type,
+                'size' => $size,
+                'source' => $source
+            ],
+            'normalized' => $normalized,
+            'exists' => [
+                'full' => $exists_full,
+                'thumbnail' => $exists_thumb
+            ],
+            'urls' => [
+                'full' => $built_full,
+                'thumbnail' => $built_thumb
+            ],
+            'fs' => [
+                'images_base_dir' => $images_dir,
+                'full_dir' => $dir_full,
+                'thumbnail_dir' => $dir_thumb
+            ],
+            'hints' => [
+                'upload_full_to' => $dir_full . '/' . $normalized,
+                'upload_thumb_to' => $dir_thumb ? ($dir_thumb . '/' . $normalized) : null
+            ]
+        ], 'debug');
         break;
 
     // ========== НЕИЗВЕСТНОЕ ДЕЙСТВИЕ ==========
