@@ -2704,6 +2704,67 @@ switch ($action) {
         ]);
         break;
 
+    case 'debug_image':
+        // Диагностика изображений: по dish_id или filename
+        $dish_id = isset($params['dish_id']) ? (int)$params['dish_id'] : 0;
+        $filename = isset($params['filename']) ? trim($params['filename']) : '';
+        $type = isset($params['type']) ? $params['type'] : 'product'; // product|promotion
+        $size = isset($params['size']) ? $params['size'] : 'full'; // full|thumbnail
+
+        $source = 'params';
+        if ($dish_id > 0 && $type === 'product') {
+            $conn = getDBConnection();
+            $stmt = $conn->prepare("SELECT image FROM dishes WHERE id = ? LIMIT 1");
+            $stmt->bind_param("i", $dish_id);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+            if ($row && !empty($row['image'])) {
+                $filename = $row['image'];
+                $source = 'dishes.image';
+            }
+        }
+
+        $normalized = normalizeImageFilename($filename);
+        $exists_full = imageFileExistsOnDisk($normalized, $type, 'full');
+        $exists_thumb = ($type === 'promotion') ? null : imageFileExistsOnDisk($normalized, 'product', 'thumbnail');
+
+        $built_full = buildImageUrl($normalized, $type, 'full');
+        $built_thumb = ($type === 'promotion') ? null : buildImageUrl($normalized, 'product', 'thumbnail');
+
+        $images_dir = getImagesBaseDir();
+        $dir_full = getImagesDirFor($type, 'full');
+        $dir_thumb = ($type === 'promotion') ? null : getImagesDirFor('product', 'thumbnail');
+
+        apiSuccess([
+            'input' => [
+                'dish_id' => $dish_id,
+                'filename_param' => $filename,
+                'type' => $type,
+                'size' => $size,
+                'source' => $source
+            ],
+            'normalized' => $normalized,
+            'exists' => [
+                'full' => $exists_full,
+                'thumbnail' => $exists_thumb
+            ],
+            'urls' => [
+                'full' => $built_full,
+                'thumbnail' => $built_thumb
+            ],
+            'fs' => [
+                'images_base_dir' => $images_dir,
+                'full_dir' => $dir_full,
+                'thumbnail_dir' => $dir_thumb
+            ],
+            'hints' => [
+                'upload_full_to' => $dir_full . '/' . $normalized,
+                'upload_thumb_to' => $dir_thumb ? ($dir_thumb . '/' . $normalized) : null
+            ]
+        ], 'debug');
+        break;
+
     // ========== НЕИЗВЕСТНОЕ ДЕЙСТВИЕ ==========
     
     default:
