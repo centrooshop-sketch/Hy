@@ -321,17 +321,49 @@ function apiSuccess($data = null, $message = 'Success', $code = 200) {
 // ==============================
 /**
  * Returns canonical base URL for building absolute links
+ * Priority: BASE_URL env -> X-Forwarded-Proto/HTTPS + Host -> http(s)://localhost
  */
 function getBaseUrl() {
-    // Force HTTPS canonical host to avoid mixed content issues in apps
-    return 'https://ryabokonov.site';
+    $envBase = getenv('BASE_URL');
+    if ($envBase && is_string($envBase)) {
+        return rtrim($envBase, '/');
+    }
+
+    // Detect scheme behind proxies and standard HTTPS
+    $protoHeader = isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) : null;
+    $httpsFlag = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
+    $scheme = $protoHeader ? ($protoHeader === 'https' ? 'https' : 'http') : ($httpsFlag ? 'https' : 'http');
+
+    $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : (isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost');
+    return $scheme . '://' . $host;
 }
 
 /**
- * Returns project root path segment (leading slash, no trailing slash)
+ * Returns project root path segment used in public URLs
+ * Examples: "" (site root), "/tokio" (subfolder deploy)
+ * Priority: PROJECT_PATH env -> derive from DOCUMENT_ROOT + filesystem
  */
 function getProjectPath() {
-    return '/tokio';
+    $envPath = getenv('PROJECT_PATH');
+    if ($envPath !== false && $envPath !== '') {
+        $normalized = '/' . trim($envPath, '/');
+        return $normalized === '/' ? '' : $normalized;
+    }
+
+    // Try to derive when API lives in a subfolder like /<project>/api-app
+    $docRoot = isset($_SERVER['DOCUMENT_ROOT']) ? rtrim($_SERVER['DOCUMENT_ROOT'], '/') : '';
+    $apiDir = rtrim(__DIR__, '/');
+    $projectDir = rtrim(dirname($apiDir), '/');
+
+    if ($docRoot && strncmp($projectDir, $docRoot, strlen($docRoot)) === 0) {
+        $webPath = substr($projectDir, strlen($docRoot));
+        $webPath = '/' . ltrim($webPath, '/');
+        return $webPath === '/' ? '' : $webPath;
+    }
+
+    // Fallback to root
+    return '';
 }
 
 /**
@@ -370,7 +402,8 @@ function buildImageUrl($filename, $type = 'product', $size = 'full') {
     }
 
     // rawurlencode for safe transport (keeps spaces as %20 etc.)
-    return getBaseUrl() . getProjectPath() . '/' . $segment . '/' . rawurlencode($effectiveName);
+    $base = rtrim(getBaseUrl() . getProjectPath(), '/');
+    return $base . '/' . $segment . '/' . rawurlencode($effectiveName);
 }
 
 /**
@@ -392,9 +425,35 @@ function buildProductImageUrls($filename) {
 // Filesystem helpers for images
 // ==============================
 function getImagesBaseDir() {
-    // api-app is sibling to images directory
-    $path = __DIR__ . '/../images';
-    return $path;
+    // Allow explicit override via environment
+    $envDir = getenv('IMAGES_DIR');
+    if ($envDir && is_string($envDir)) {
+        return rtrim($envDir, '/');
+    }
+
+    // Try to map web path to filesystem path under document root
+    $docRoot = isset($_SERVER['DOCUMENT_ROOT']) ? rtrim($_SERVER['DOCUMENT_ROOT'], '/') : '';
+    if ($docRoot) {
+        $candidate = $docRoot . getProjectPath() . '/images';
+        if (@is_dir($candidate)) {
+            return $candidate;
+        }
+    }
+
+    // Fall back to common relative locations around API directory
+    $candidates = [
+        __DIR__ . '/../images',
+        __DIR__ . '/images',
+        dirname(__DIR__) . '/images'
+    ];
+    foreach ($candidates as $dir) {
+        if (@is_dir($dir)) {
+            return $dir;
+        }
+    }
+
+    // Default path (may not exist but keeps deterministic behavior)
+    return __DIR__ . '/../images';
 }
 
 function getImagesDirFor($type = 'product', $size = 'full') {
@@ -410,7 +469,11 @@ function getImagesDirFor($type = 'product', $size = 'full') {
 
 function imageFileExistsOnDisk($filename, $type = 'product', $size = 'full') {
     $dir = getImagesDirFor($type, $size);
-    $path = $dir . '/' . basename($filename);
+    $path = rtrim($dir, '/') . '/' . basename($filename);
+    // Support absolute filesystem path provided directly
+    if (strpos($filename, DIRECTORY_SEPARATOR) !== false && @is_file($filename)) {
+        return true;
+    }
     // Suppress open_basedir warnings if configured; just return false in that case
     return @is_file($path);
 }
