@@ -358,6 +358,7 @@ function buildImageUrl($filename, $type = 'product', $size = 'full') {
     }
 
     $name = normalizeImageFilename($filename);
+    $effectiveName = chooseImageFilenameForUrl($name, $type, $size);
 
     $segment = 'images';
     if ($type === 'promotion') {
@@ -369,19 +370,71 @@ function buildImageUrl($filename, $type = 'product', $size = 'full') {
     }
 
     // rawurlencode for safe transport (keeps spaces as %20 etc.)
-    return getBaseUrl() . getProjectPath() . '/' . $segment . '/' . rawurlencode($name);
+    return getBaseUrl() . getProjectPath() . '/' . $segment . '/' . rawurlencode($effectiveName);
 }
 
 /**
  * Convenience wrapper that returns both full and thumbnail URLs for products
  */
 function buildProductImageUrls($filename) {
+    // If thumbnail is missing on disk, gracefully fall back to full
     $full = buildImageUrl($filename, 'product', 'full');
-    $thumb = buildImageUrl($filename, 'product', 'thumbnail');
+    $thumbCandidate = normalizeImageFilename($filename);
+    $thumbExists = imageFileExistsOnDisk($thumbCandidate, 'product', 'thumbnail');
+    $thumb = $thumbExists ? buildImageUrl($filename, 'product', 'thumbnail') : $full;
     return [
         'image_url' => $full,
         'thumbnail_url' => $thumb
     ];
+}
+
+// ==============================
+// Filesystem helpers for images
+// ==============================
+function getImagesBaseDir() {
+    // api-app is sibling to images directory
+    $path = __DIR__ . '/../images';
+    return $path;
+}
+
+function getImagesDirFor($type = 'product', $size = 'full') {
+    $base = rtrim(getImagesBaseDir(), '/');
+    if ($type === 'promotion') {
+        return $base . '/promotions';
+    }
+    if ($size === 'thumbnail') {
+        return $base . '/thumbnails';
+    }
+    return $base; // products full
+}
+
+function imageFileExistsOnDisk($filename, $type = 'product', $size = 'full') {
+    $dir = getImagesDirFor($type, $size);
+    $path = $dir . '/' . basename($filename);
+    // Suppress open_basedir warnings if configured; just return false in that case
+    return @is_file($path);
+}
+
+function chooseImageFilenameForUrl($filename, $type = 'product', $size = 'full') {
+    $name = normalizeImageFilename($filename);
+    // If the requested variant exists, use it
+    if (imageFileExistsOnDisk($name, $type, $size)) {
+        return $name;
+    }
+    // If a thumbnail was requested but missing, try full-size
+    if ($type !== 'promotion' && $size === 'thumbnail' && imageFileExistsOnDisk($name, 'product', 'full')) {
+        return $name;
+    }
+    // Try placeholder (prefer matching size, then full)
+    $placeholder = 'placeholder.jpg';
+    if (imageFileExistsOnDisk($placeholder, $type, $size)) {
+        return $placeholder;
+    }
+    if (imageFileExistsOnDisk($placeholder, $type, 'full')) {
+        return $placeholder;
+    }
+    // Fall back to original name even if missing to avoid breaking schema
+    return $name;
 }
 
 /**
