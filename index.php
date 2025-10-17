@@ -1898,7 +1898,7 @@ switch ($action) {
                             'weight' => $weight,
                             'unit_abbr' => $item['unit_abbr'] ?? 'г',
                             'subtotal' => (float)$item['price'] * (int)$item['quantity'],
-                            'image' => $imgUrls['image_url'],
+                            'image' => $img,
                             'image_url' => $imgUrls['image_url'],
                             'thumbnail_url' => $imgUrls['thumbnail_url']
                         ];
@@ -2050,7 +2050,7 @@ switch ($action) {
                     'weight' => $weight,
                     'unit_abbr' => $item['unit_abbr'] ?? 'г',
                     'subtotal' => (float)$item['price'] * (int)$item['quantity'],
-                    'image' => $image_url,
+                    'image' => $img,
                     'image_url' => $image_url,
                     'thumbnail_url' => $thumbnail_url
                 ];
@@ -2107,7 +2107,7 @@ switch ($action) {
                         'weight' => $weight,
                         'unit_abbr' => $item['unit_abbr'] ?? 'г',
                         'subtotal' => (float)$item['price'] * (int)$item['quantity'],
-                        'image' => $image_url,
+                        'image' => $img,
                         'image_url' => $image_url,
                         'thumbnail_url' => $thumbnail_url
                     ];
